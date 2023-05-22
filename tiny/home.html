@@ -1,8 +1,18 @@
 <html>
 <head><title>test</title></head>
+<script>
+    function change() {
+        let arg1 = document.getElementById("first").value;
+        let arg2 = document.getElementById("second").value;
+        document.location.href=`./cgi-bin/adder?${arg1}&${arg2}`;
+    }
+</script>
 <body> 
-<img align="middle" src="pic.jpg">
-<video src="./funny.mp4" controls muted ></video>
-KIm
+    <img align="middle" src="pic.jpg">
+    <video src="./funny.mp4" controls muted ></video>
+    <p> KIM</p>
+    <input type = "text" id = "first" size = "20">
+    <input type = "text" id = "second" size = "20">
+    <button onclick="change()">adder</button>
 </body>
 </html>
