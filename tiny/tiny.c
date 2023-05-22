@@ -7,8 +7,7 @@
  *   - Fixed sprintf() aliasing issue in serve_static(), and clienterror().
  */
 #include "csapp.h"
-#include <stdlib.h>
-#define original_staticx
+
 
 
 void doit(int fd);
@@ -18,6 +17,31 @@ void serve_static(int fd, char *filename, int filesize);
 void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
+
+int main(int argc, char **argv) {
+  int listenfd, connfd;
+  char hostname[MAXLINE], port[MAXLINE];
+  socklen_t clientlen;
+  struct sockaddr_storage clientaddr;
+
+  /* Check command line args */
+  if (argc != 2) {
+    fprintf(stderr, "usage: %s <port>\n", argv[0]);
+    exit(1);
+  }
+
+  listenfd = Open_listenfd(argv[1]);
+  while (1) {
+    clientlen = sizeof(clientaddr);
+    connfd = Accept(listenfd, (SA *)&clientaddr,
+                    &clientlen);  // line:netp:tiny:accept
+    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,
+                0);
+    printf("Accepted connection from (%s, %s)\n", hostname, port);
+    doit(connfd);   // line:netp:tiny:doit
+    Close(connfd);  // line:netp:tiny:close
+  }
+}
 
 // 응답을 해주는 함수
 void doit(int fd){
@@ -40,15 +64,16 @@ void doit(int fd){
   sscanf(buf,"%s %s %s", method,uri,version);
   // method가 GET이 아니라면 error message 출력
   // problem 11.11을 위해 Head 추가
-  if (strcasecmp(method,"GET") != 0 || strcasecmp(method,"HEAD") != 0){
-    clienterror(fd,method,"501","Not implemented", "Tiny does not implement this error");
-    return;  
+  if(strcasecmp(method, "GET")){
+    clienterror(fd, method, "501", "Not implemented",
+                "Tiny does not implement this method");
+    return;
   }
   read_requesthdrs(&rio);
   /* GET요청에서 URI(uniform resource identifier)를 출력*/
   // URI는 클라이언트가 서버에게 요청하는 리소스의 위치를 식별하는데 사용되는 부분
   is_static = parse_uri(uri,filename,cgiargs);
-  // filename에 맞는 정보 조회를 하지 못했으면 error massage를 출력한ㄴ다
+  // filename에 맞는 정보 조회를 하지 못했으면 error massage를 출력한다
   if (stat(filename,&sbuf) <0 ){
     clienterror(fd,filename,"404","Not found","Tiny couldn't find this file");
     return;
@@ -61,7 +86,7 @@ void doit(int fd){
       return;
     }
     // 정적 파일을 응답한다. 정적파일 - 서버에 이미 저장되어 있는 파일
-    serve_static(fd,filename,sbuf.st_size, method);
+    serve_static(fd,filename,sbuf.st_size);
   }
   // request file이 다이나믹일 때 실행
   else {
@@ -71,7 +96,7 @@ void doit(int fd){
       return;
     }
      // 다이나믹 파일 반응
-    serve_dynamic(fd,filename,cgiargs,method);
+    serve_dynamic(fd,filename,cgiargs);
   }
 }
 // error 발생시 , client에게 보내기 위한 response (error message)
@@ -81,6 +106,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   // response body 
   // html 헤더 생성
   sprintf(body, "<html><title>Tiny Error</title>");
+  // HTML 응답 바디 생성
   sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
   sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
   sprintf(body,"%s<p>%s: %s\r\n", body,longmsg,cause);
@@ -88,6 +114,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   
   // response 쓰기
   // 버전, 에러번호 , 상태메시지
+  
   sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum,shortmsg);
   Rio_writen(fd,buf, strlen(buf));
   sprintf(buf, "Content-type: text/html\r\n");
@@ -110,6 +137,11 @@ void read_requesthdrs(rio_t *rp)
  }
  return;
 }
+/*
+parse_uri 
+정적 컨텐츠를 위한 홈 디렉토리를 설정하고 
+실행파일의 홈디렉토리를 설정한다.
+*/
 
 // uri parsing을 하여 static을 request할 경우 1, dynamic일 경우 0
 int parse_uri(char *uri, char *filename, char *cgiargs)
@@ -153,31 +185,96 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
     return 0;
   }
 }
+/* serve_static
+지역 파일의 내용을 포함하고 있는 본체를 갖는 HTTP 응답을 보낸다.
+먼저 파일 이름의 접미어 부분을 검사해서 파일 타입을 결정하고
+클라이언트에 응답 중과 응답 헤더를 보낸다.
+*/
+void serve_static(int fd, char *filename, int filesize)
+{
+  int srcfd;
+  char *srcp, filetype[MAXLINE], buf[MAXBUF];
+ /*
+ serve_static 함수는 정수형 fd, 문자열 포인터 filename,정수형 filesize 세 개의 매개변수를 받는다. 
+ fd - 클라이언트와의 연결에 사용되는 파일 디스크립터
+ filename - 전송할 정적 파일의 경로와 이름
+ filesize - 전송할 파일의 크기
+ */
+ // HTTP 응답 헤더를 생성하여 buf에 저장한다.
+  get_filetype(filename, filetype);
+  sprintf(buf, "HTTP/1.0 200 OK\r\n");
+  sprintf(buf,"%sServer: Tiny Web Server\r\n",buf);
+  sprintf(buf,"%sConnection: close\r\n", buf);
+  sprintf(buf,"%sContent-length: %d\r\n",buf,filesize);
+  sprintf(buf, "%sContent-type: %s\r\n\r\n",buf,filetype);
+  // 생성된 응답 헤더를 클라이언트에게 전송한다
+  Rio_writen(fd, buf, strlen(buf));
+  printf("Response headers:\n");
+  printf("%s",buf);
+// 요청한 파일을 읽기 전용으로 열고, 파일의 내용을 srcp에 매핑
+  srcfd = Open(filename, O_RDONLY,0);
+  srcp = Mmap(0,filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+  Close(srcfd);
+  // 매핑된 파일의 내용을 클라이언트에게 전송한다
+  Rio_writen(fd,srcp,filesize);
+  // 소켓 fd에 srcp의 내용을 전송
+  // 매핑된 메모리를 해제
+  Munmap(srcp,filesize);
+  // Munmap함수를 사용하여 srcp에 할당된 메모리를 해제
 
-#idef original_staticx
+  /* 11.9 homework
+    정적컨텐츠를 처리 할 때, 요청한 파일을 mmap과 rio_readn대신 malloc, rio_readn, rio_writen을 사용해서 연결식별자에게 복사
+    // 요청한 파일을 읽기 전용으로 열고, 파일의 내용을 srcp에 복사한다.
+    srcfd = Open(filename, O_RDONLY,0); 이후 부터 시작된다.
+    char *srcp = malloc(filesize);
+    rio_readn(srcfd, srcp, filesize);
+    Close(srcfd);
 
+    // srcp의 내용을 클라이언트에게 전달
+    Rio_writen(fd,srcp, filesize);
 
-int main(int argc, char **argv) {
-  int listenfd, connfd;
-  char hostname[MAXLINE], port[MAXLINE];
-  socklen_t clientlen;
-  struct sockaddr_storage clientaddr;
+    // 할당된 메모리를 해제한다.
+    free(srcp);
+    
+  
+  */
+}
+/* get_filetype 
+파일의 컨텐츠 타입을 확인하는 함수
+*/
+void get_filetype(char *filename, char *filetype)
+{
+  if (strstr(filename, ".html"))
+    strcpy(filetype, "text/html");  // filename에 .html이 포함되어 있다면 text/html을 복사합니다.   
+  else if (strstr(filename, ".gif"))
+    strcpy(filetype, "image/gif");  // filename에 .gif가 포함되어 있다면 ,filetype에 image/gif를 복사한다
+  else if (strstr(filename, ".png")) 
+    strcpy(filetype, "image/png"); // filename에 .png가 포함되어 있다면 ,filetype에 image/png을 복사한다
+  else if (strstr(filename, ".jpg"))
+    strcpy(filetype, "image/jpeg"); // filename에 .jpg가 포함되어 있다면 ,filetype에 image/jpeg을 복사한다
+  
+  else if(strstr(filename, ".mp4"))
+    strcpy(filetype, "video/mp4"); // 비디오 파일을 읽을 수 있게 URI parese시 처리할 수 있는 filetype에 mp4추가
+  else
+    strcpy(filetype, "text/plain"); // filename에 .gif가 포함되어 있다면 ,filetype에 text/plain을 복사한다
+}
+/*
+serve_dynamic 
+동적 컨텐츠를 자식의 컨텍스트에서 실행할 수 있도록 해주는 함수다
+*/
+void serve_dynamic(int fd, char *filename, char *cgiargs)
+{
+  char buf[MAXLINE], *emptylist[] ={ NULL };
+  
+  sprintf(buf, "HTTP/1.0 200 OK\r\n");
+  Rio_writen(fd,buf, strlen(buf));
+  sprintf(buf, "Server: Tiny Web Server\r\n");
+  Rio_writen(fd,buf,strlen(buf));
 
-  /* Check command line args */
-  if (argc != 2) {
-    fprintf(stderr, "usage: %s <port>\n", argv[0]);
-    exit(1);
+  if(Fork() == 0){
+    setenv("QUERY_STRING", cgiargs, 1);
+    Dup2(fd, STDOUT_FILENO);
+    Execve(filename, emptylist, environ);
   }
-
-  listenfd = Open_listenfd(argv[1]);
-  while (1) {
-    clientlen = sizeof(clientaddr);
-    connfd = Accept(listenfd, (SA *)&clientaddr,
-                    &clientlen);  // line:netp:tiny:accept
-    Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,
-                0);
-    printf("Accepted connection from (%s, %s)\n", hostname, port);
-    doit(connfd);   // line:netp:tiny:doit
-    Close(connfd);  // line:netp:tiny:close
-  }
+  Wait(NULL);
 }
