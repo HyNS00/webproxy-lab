@@ -235,11 +235,11 @@ void serve_static(int fd, char *filename, int filesize)
 
     // 할당된 메모리를 해제한다.
     free(srcp);
-    
+
   
   */
 }
-/* get_filetype 
+/* get_filetype ..
 파일의 컨텐츠 타입을 확인하는 함수
 */
 void get_filetype(char *filename, char *filetype)
